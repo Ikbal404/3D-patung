@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js xr - GLTF Transform</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+		<style>
+			body { margin: 0; overflow: hidden; }
+			#info {
+				position: absolute;
+				top: 10px;
+				width: 100%;
+				text-align: center;
+				z-index: 100;
+				color: white;
+				font-family: sans-serif;
+			}
+			a { color: #f0f0f0; }
+		</style>
+	</head>
+	<body>
+
+		<div id="info">
+			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> xr - GLTF Transform (scene.gltf)
+		</div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "./build/three.module.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three';
+			import { TransformControls } from 'three/addons/controls/TransformControls.js';
+			import { XRButton } from 'three/addons/webxr/XRButton.js';
+			import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+			import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'; // Impor GLTFLoader
+
+			let container;
+			let camera, scene, renderer;
+			let controller1, controller2, line;
+			let controllerGrip1, controllerGrip2;
+
+			let raycaster;
+
+			let controls, group;
+
+			init();
+
+			function init() {
+
+				container = document.createElement( 'div' );
+				document.body.appendChild( container );
+
+				scene = new THREE.Scene();
+				scene.background = new THREE.Color( 0x808080 );
+
+				camera = new THREE.PerspectiveCamera( 50, window.innerWidth / window.innerHeight, 0.1, 10 );
+				camera.position.set( 0, 1.6, 0 );
+
+				// Lantai
+				const floorGeometry = new THREE.PlaneGeometry( 6, 6 );
+				const floorMaterial = new THREE.ShadowMaterial( { opacity: 0.25, blending: THREE.CustomBlending, transparent: false } );
+				const floor = new THREE.Mesh( floorGeometry, floorMaterial );
+				floor.rotation.x = - Math.PI / 2;
+				floor.receiveShadow = true;
+				scene.add( floor );
+
+				// Pencahayaan
+				scene.add( new THREE.HemisphereLight( 0xbcbcbc, 0xa5a5a5, 3 ) );
+				const light = new THREE.DirectionalLight( 0xffffff, 3 );
+				light.position.set( 0, 6, 0 );
+				light.castShadow = true;
+				// Atur properti bayangan
+				light.shadow.camera.top = 3;
+				light.shadow.camera.bottom = - 3;
+				light.shadow.camera.right = 3;
+				light.shadow.camera.left = - 3;
+				light.shadow.mapSize.set( 4096, 4096 );
+				scene.add( light );
+
+				group = new THREE.Group();
+				scene.add( group );
+
+				// --- Bagian Pemuatan Model GLTF ---
+				const loader = new GLTFLoader();
+				loader.load(
+					'models/scene.gltf', // Path ke objek 3D Anda
+					function ( gltf ) {
+						const model = gltf.scene;
+						
+						// Skala Awal (Anda mungkin perlu menyesuaikannya)
+						model.scale.set(1, 1, 1);
+						model.position.set( 0, 0, -1 );
+						
+						// Aktifkan bayangan dan penerimaan bayangan untuk semua mesh di model
+						model.traverse( function ( object ) {
+							if ( object.isMesh ) {
+								object.castShadow = true;
+								object.receiveShadow = true;
+							}
+						} );
+						
+						group.add( model );
+
+						// Pasang TransformControls ke model yang baru dimuat
+						if ( group.children.length > 0 ) {
+							controls.attach( group.children[ 0 ] );
+						}
+					},
+					// Fungsi progress (opsional)
+					function ( xhr ) {
+						console.log( 'Model GLTF ' + ( xhr.loaded / xhr.total * 100 ) + '% dimuat' );
+					},
+					// Fungsi error
+					function ( error ) {
+						console.error( 'Terjadi kesalahan saat memuat model GLTF:', error );
+					}
+				);
+				// --- Akhir Pemuatan Model ---
+
+
+				renderer = new THREE.WebGLRenderer( { antialias: true } );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.setAnimationLoop( animate );
+				renderer.shadowMap.enabled = true;
+				renderer.xr.enabled = true; // Aktifkan XR
+				container.appendChild( renderer.domElement );
+
+				document.body.appendChild( XRButton.createButton( renderer ) );
+
+				// Pengaturan Controller XR
+				controller1 = renderer.xr.getController( 0 );
+				controller1.addEventListener( 'select', onSelect );
+				controller1.addEventListener( 'selectstart', onControllerEvent );
+				controller1.addEventListener( 'selectend', onControllerEvent );
+				controller1.addEventListener( 'move', onControllerEvent );
+				controller1.userData.active = false;
+				scene.add( controller1 );
+
+				controller2 = renderer.xr.getController( 1 );
+				controller2.addEventListener( 'select', onSelect );
+				controller2.addEventListener( 'selectstart', onControllerEvent );
+				controller2.addEventListener( 'selectend', onControllerEvent );
+				controller2.addEventListener( 'move', onControllerEvent );
+				controller2.userData.active = true;
+				scene.add( controller2 );
+
+				const controllerModelFactory = new XRControllerModelFactory();
+
+				controllerGrip1 = renderer.xr.getControllerGrip( 0 );
+				controllerGrip1.add( controllerModelFactory.createControllerModel( controllerGrip1 ) );
+				scene.add( controllerGrip1 );
+
+				controllerGrip2 = renderer.xr.getControllerGrip( 1 );
+				controllerGrip2.add( controllerModelFactory.createControllerModel( controllerGrip2 ) );
+				scene.add( controllerGrip2 );
+
+				// Garis Raycaster
+				const geometry = new THREE.BufferGeometry().setFromPoints( [ new THREE.Vector3( 0, 0, 0 ), new THREE.Vector3( 0, 0, - 1 ) ] );
+				line = new THREE.Line( geometry );
+				line.name = 'line';
+				line.scale.z = 5;
+
+				raycaster = new THREE.Raycaster();
+
+				// TransformControls
+				controls = new TransformControls( camera, renderer.domElement );
+				// TransformControls akan dipasang setelah model dimuat (di dalam loader.load)
+				scene.add( controls.getHelper() );
+
+				window.addEventListener( 'resize', onWindowResize );
+
+			}
+
+			// Fungsi Dipanggil Saat Tombol 'Select' Dipicu
+			function onSelect( event ) {
+
+				const controller = event.target;
+
+				controller1.userData.active = false;
+				controller2.userData.active = false;
+
+				// Aktifkan visualisasi garis pada controller yang aktif
+				if ( controller === controller1 ) {
+					controller1.userData.active = true;
+					controller1.add( line );
+				}
+
+				if ( controller === controller2 ) {
+					controller2.userData.active = true;
+					controller2.add( line );
+				}
+
+				raycaster.setFromXRController( controller );
+
+				// Cari objek yang beririsan. 'true' penting untuk model GLTF yang kompleks.
+				const intersects = raycaster.intersectObjects( group.children, true );
+
+				if ( intersects.length > 0 ) {
+
+					let selectedObject = intersects[ 0 ].object;
+					
+					// Naik ke objek parent root GLTF (yaitu gltf.scene) untuk memindahkan seluruh model
+					// Ini mencegah TransformControls hanya mengontrol mesh kecil
+					while (selectedObject.parent && selectedObject.parent !== group) {
+						selectedObject = selectedObject.parent;
+					}
+					
+					controls.attach( selectedObject );
+
+				}
+
+			}
+
+			// Fungsi Dipanggil Saat Aksi Controller Terjadi (selectstart/selectend/move)
+			function onControllerEvent( event ) {
+
+				const controller = event.target;
+
+				if ( controller.userData.active === false ) return;
+
+				controls.getRaycaster().setFromXRController( controller );
+
+				switch ( event.type ) {
+
+					case 'selectstart':
+						controls.pointerDown( null );
+						break;
+
+					case 'selectend':
+						controls.pointerUp( null );
+						break;
+
+					case 'move':
+						controls.pointerHover( null );
+						controls.pointerMove( null );
+						break;
+
+				}
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			function animate() {
+
+				renderer.render( scene, camera );
+
+			}
+
+		</script>
+	</body>
+</html>
